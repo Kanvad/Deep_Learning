@@ -181,3 +181,4 @@ val/
 data/
 **/data/
 *.pth
+temp.*

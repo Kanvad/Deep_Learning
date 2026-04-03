@@ -1,32 +1,47 @@
+from pathlib import Path
+
 import streamlit as st
 import torch
 import torch.nn as nn
-from torchvision import transforms
 from PIL import Image
-import numpy as np
+from torchvision import transforms
 
-st.set_page_config(page_title="CNN Demo", page_icon="🌿")
+st.set_page_config(page_title="CNN Demo", page_icon="🌿", layout="wide")
+
+APP_DIR = Path(__file__).resolve().parent
 
 st.title("🌿 CNN Image Classification Demo")
+st.caption("Tải ảnh lên, chọn model và xem kết quả dự đoán ngay trên giao diện.")
 
-st.markdown("### Chọn loại model:")
-model_type = st.selectbox(
-    "Model type",
-    ["Cat & Dog", "CIFAR-10", "PlantVillage"]
-)
+swap_labels = False
+
+with st.sidebar:
+    st.markdown("### Chọn model")
+    model_type = st.selectbox(
+        "Model type",
+        ["Cat & Dog", "CIFAR-10", "PlantVillage"],
+    )
+    st.markdown("### Hướng dẫn")
+    st.write("1. Chọn model phù hợp với ảnh.")
+    st.write("2. Tải ảnh JPG/PNG lên.")
+    st.write("3. Kết quả sẽ tự hiện ra.")
+    
+    if model_type == "Cat & Dog":
+        st.markdown("### Cài đặt Cat & Dog")
+        swap_labels = st.checkbox("Đảo nhãn (nếu kết quả lệch)", value=False)
 
 # ============================================================
 # TODO: Thay đổi đường dẫn model tại đây
 # ============================================================
 MODEL_PATHS = {
-    "Cat & Dog": "Lab6\catdog_pure_cnn_best.pth",
-    "CIFAR-10": "Lab6\cifar10_pure_cnn_best.pth",
-    "PlantVillage": "Lab6\plantvillage_pure_cnn_best.pth",
+    "Cat & Dog": APP_DIR / "catdog_pure_cnn_best.pth",
+    "CIFAR-10": APP_DIR / "cifar10_pure_cnn_best.pth",
+    "PlantVillage": APP_DIR / "plantvillage_pure_cnn_best.pth",
 }
 
 CLASS_NAMES = {
-    "Cat & Dog": ["cat", "dog"],
-    "CIFAR-10": ["airplane", "automobile", "bird", "cat", "deer", "dog", "frog", "horse", "ship", "truck"],
+    "Cat & Dog": ["con mèo", "con chó"],
+    "CIFAR-10": ["máy bay", "ô tô", "chim", "con mèo", "hươu", "con chó", "ếch", "ngựa", "tàu thủy", "xe tải"],
     "PlantVillage": [
         "Apple___Apple_scab", "Apple___Black_rot", "Apple___Cedar_apple_rust", "Apple___healthy",
         "Blueberry___healthy", "Cherry___Powdery_mildew", "Cherry___healthy", "Corn___Cercospora_leaf_spot",
@@ -132,6 +147,7 @@ class PlantVillageCNN(nn.Module):
         return x
 
 
+@st.cache_resource
 def load_model(model_type):
     model_path = MODEL_PATHS[model_type]
     
@@ -141,13 +157,23 @@ def load_model(model_type):
         model = CIFAR10CNN(num_classes=10)
     else:
         model = PlantVillageCNN(num_classes=38)
-    
-    model.load_state_dict(torch.load(model_path, map_location="cpu"))
+
+    state_dict = torch.load(model_path, map_location="cpu")
+    if isinstance(state_dict, dict) and "state_dict" in state_dict:
+        state_dict = state_dict["state_dict"]
+
+    if any(key.startswith("_orig_mod.") for key in state_dict.keys()):
+        state_dict = {
+            key.replace("_orig_mod.", "", 1): value
+            for key, value in state_dict.items()
+        }
+
+    model.load_state_dict(state_dict)
     model.eval()
     return model
 
 
-def predict(image, model, model_type):
+def predict(image, model, model_type, swap_cat_dog=False):
     img_size = IMG_SIZES[model_type]
     mean, std = MEAN_STD[model_type]
     
@@ -168,8 +194,11 @@ def predict(image, model, model_type):
         if model_type == "Cat & Dog":
             prob = torch.sigmoid(logits).item()
             pred = 1 if prob >= 0.5 else 0
+            if swap_cat_dog:
+                pred = 1 - pred
             result = CLASS_NAMES[model_type][pred]
-            confidence = prob if pred == 1 else 1 - prob
+            # Tính confidence dựa trên xác suất của class được dự đoán
+            confidence = prob if pred == 1 else (1 - prob)
         else:
             probs = torch.softmax(logits, dim=1)
             pred = logits.argmax(dim=1).item()
@@ -180,27 +209,37 @@ def predict(image, model, model_type):
 
 
 st.markdown("---")
-st.markdown("### Tải hình ảnh lên:")
+left_col, right_col = st.columns([1, 1.2], gap="large")
 
-uploaded_file = st.file_uploader("Chọn hình ảnh", type=["jpg", "jpeg", "png"])
+with left_col:
+    st.markdown("### Tải hình ảnh lên")
+    uploaded_file = st.file_uploader("Chọn hình ảnh", type=["jpg", "jpeg", "png"])
 
-if uploaded_file is not None:
-    image = Image.open(uploaded_file)
-    st.image(image, caption="Hình đã tải lên", use_container_width=True)
-    
-    if st.button("Dự đoán"):
+    if uploaded_file is not None:
+        image = Image.open(uploaded_file)
+        st.image(image, caption="Ảnh đã tải lên", use_container_width=True)
+    else:
+        image = None
+        st.info("Hãy tải một hình ảnh để bắt đầu.")
+
+with right_col:
+    st.markdown("### Kết quả dự đoán")
+
+    if image is None:
+        st.write("Kết quả sẽ hiển thị ở đây ngay sau khi bạn tải ảnh lên.")
+    else:
         with st.spinner("Đang dự đoán..."):
             try:
                 model = load_model(model_type)
-                result, confidence = predict(image, model, model_type)
-                
-                st.success(f"🎯 Kết quả: **{result}**")
-                st.info(f"📊 Độ chính xác: {confidence*100:.2f}%")
-                
+                result, confidence = predict(image, model, model_type, swap_cat_dog=swap_labels)
+
+                st.success(f"Kết quả: {result}")
+                st.metric("Độ tin cậy", f"{confidence * 100:.2f}%")
+
             except FileNotFoundError:
-                st.error(f"❌ Không tìm thấy model! Vui lòng kiểm tra đường dẫn: {MODEL_PATHS[model_type]}")
+                st.error(f"Không tìm thấy model. Kiểm tra lại đường dẫn: {MODEL_PATHS[model_type]}")
             except Exception as e:
-                st.error(f"❌ Lỗi: {str(e)}")
+                st.error(f"Lỗi: {str(e)}")
 
 st.markdown("---")
-st.caption("💡 Demo CNN thuần (PyTorch) - Không sử dụng pretrained models")
+st.caption("Demo CNN thuần (PyTorch) - Không sử dụng pretrained models")
