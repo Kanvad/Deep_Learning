@@ -180,3 +180,4 @@ train/
 val/
 data/
 **/data/
+*.pth
